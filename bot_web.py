@@ -4,6 +4,8 @@ import sqlite3
 import datetime
 import logging
 import time
+import threading
+from flask import Flask
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -15,8 +17,18 @@ ADMIN_CHAT_ID = int(os.getenv('ADMIN_CHAT_ID', '-1003253421930'))
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# Создаем Flask app для веб-сервера
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🤖 Telegram Bot is running!"
+
+@app.route('/health')
+def health():
+    return "OK"
+
 def init_database():
-    """Инициализация базы данных"""
     conn = sqlite3.connect('reviews.db', check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute('''
@@ -33,28 +45,28 @@ def init_database():
     conn.close()
     print("✅ База данных инициализирована")
 
-@bot.message_handler(commands=['start', 'status'])
+@bot.message_handler(commands=['start'])
 def send_welcome(message):
-    """Обработчик команды /start"""
     if message.chat.type != "private":
         return
-        
+
     welcome_text = """
 🤗 Добро пожаловать!
 
-Отправьте ваш отзыв о нашей работе.
+Здесь вы можете оставить отзыв о нашей работе.
+Ваше мнение очень важно для нас!
+
 Можно отправлять текст, фото, видео и другие медиа.
 """
     bot.reply_to(message, welcome_text)
-    logger.info(f"Приветствие отправлено {message.from_user.first_name}")
 
 @bot.message_handler(content_types=['text'], func=lambda message: message.chat.type == "private")
 def handle_text(message):
     user = message.from_user
     text = message.text
-    
-    logger.info(f"📝 Текст от {user.first_name}")
-    
+
+    print(f"📝 Текст от {user.first_name}")
+
     # Сохраняем в базу
     conn = sqlite3.connect('reviews.db', check_same_thread=False)
     cursor = conn.cursor()
@@ -64,25 +76,25 @@ def handle_text(message):
     )
     conn.commit()
     conn.close()
-    
+
     # Пересылаем
     try:
         bot.forward_message(ADMIN_CHAT_ID, message.chat.id, message.message_id)
-        logger.info("✅ Текст переслан")
+        print("✅ Текст переслан")
     except Exception as e:
-        logger.error(f"❌ Ошибка пересылки: {e}")
+        print(f"❌ Ошибка пересылки: {e}")
         bot.send_message(ADMIN_CHAT_ID, f"📝 Текст от {user.first_name}:\n{text}")
-    
+
     bot.reply_to(message, "✅ Спасибо за отзыв!")
 
-@bot.message_handler(content_types=['photo', 'video', 'document'], func=lambda message: message.chat.type == "private")
+@bot.message_handler(content_types=['photo', 'video'], func=lambda message: message.chat.type == "private")
 def handle_media(message):
     user = message.from_user
     caption = message.caption or "Без описания"
-    media_type = message.content_type
-    
-    logger.info(f"📦 {media_type} от {user.first_name}")
-    
+    media_type = "фото" if message.content_type == 'photo' else "видео"
+
+    print(f"📦 {media_type} от {user.first_name}")
+
     # Сохраняем в базу
     conn = sqlite3.connect('reviews.db', check_same_thread=False)
     cursor = conn.cursor()
@@ -92,26 +104,41 @@ def handle_media(message):
     )
     conn.commit()
     conn.close()
-    
-    # Пересылаем медиа
+
+    # Пересылаем
     try:
         bot.forward_message(ADMIN_CHAT_ID, message.chat.id, message.message_id)
-        logger.info(f"✅ {media_type} переслан")
-        bot.reply_to(message, f"✅ Спасибо! Ваш {media_type} получен!")
+        print(f"✅ {media_type} переслано")
     except Exception as e:
-        logger.error(f"❌ Ошибка пересылки {media_type}: {e}")
+        print(f"❌ Ошибка пересылки {media_type}: {e}")
         bot.send_message(ADMIN_CHAT_ID, f"📦 {media_type} от {user.first_name}\n📝 Описание: {caption}")
-        bot.reply_to(message, f"✅ Спасибо! Ваш {media_type} получен!")
 
-if __name__ == "__main__":
-    print("🚀 Запуск бота на Render.com...")
+    bot.reply_to(message, f"✅ Спасибо! Ваше {media_type} получено!")
+
+def run_bot():
+    """Запускает бота в отдельном потоке"""
+    print("🤖 Запуск Telegram бота...")
     init_database()
-    print("🤖 Бот запущен и работает!")
     
-    # Бесконечный цикл с перезапуском при ошибках
     while True:
         try:
             bot.infinity_polling(timeout=60, long_polling_timeout=60)
         except Exception as e:
-            logger.error(f"🔄 Перезапуск из-за ошибки: {e}")
+            print(f"🔄 Перезапуск бота из-за ошибки: {e}")
             time.sleep(10)
+
+def run_web_server():
+    """Запускает веб-сервер"""
+    port = int(os.getenv('PORT', 5000))
+    print(f"🌐 Запуск веб-сервера на порту {port}")
+    app.run(host='0.0.0.0', port=port)
+
+if __name__ == "__main__":
+    print("🚀 Запуск приложения...")
+    
+    # Запускаем бота в отдельном потоке
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+    
+    # Запускаем веб-сервер в основном потоке
+    run_web_server()

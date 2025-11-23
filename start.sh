@@ -1,2 +1,2 @@
 #!/bin/bash
-python3 bot_render.py
+python3 bot_web.py
